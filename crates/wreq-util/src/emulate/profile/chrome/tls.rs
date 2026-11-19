@@ -218,10 +218,13 @@ impl From<ChromeTlsConfig> for TlsOptions {
             .max_tls_version(TlsVersion::TLS_1_3)
             .permute_extensions(val.permute_extensions)
             .pre_shared_key(val.pre_shared_key)
-            .enable_ech_grease(val.enable_ech_grease)
+            .ech_grease(
+                val.enable_ech_grease
+                    .then_some(EchGrease::Aead(EchGreaseAead::AES_128_GCM)),
+            )
             .alps_protocols([val.alps_protos])
             .alps_use_new_codepoint(val.alps_use_new_codepoint)
-            .aes_hw_override(true)
+            .tls13_cipher_list(AES_FIRST_TLS13_CIPHERS)
             .certificate_compressors(CERTIFICATE_COMPRESSORS)
             .build();
         if let Some(trust_anchors) = val.trust_anchors {

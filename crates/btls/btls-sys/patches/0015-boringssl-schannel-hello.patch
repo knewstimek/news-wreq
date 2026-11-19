@@ -1,0 +1,290 @@
+diff --git a/include/openssl/ssl.h b/include/openssl/ssl.h
+index 86a9400..076de75 100644
+--- a/include/openssl/ssl.h
++++ b/include/openssl/ssl.h
+@@ -1311,6 +1311,11 @@ OPENSSL_EXPORT int SSL_set_ocsp_response(SSL *ssl, const uint8_t *response,
+ // certificates.
+ #define SSL_SIGN_RSA_PKCS1_SHA256_LEGACY 0x0420
+ 
++// SSL_SIGN_DSA_SHA1 is the TLS 1.2 DSA with SHA-1 value. It may be listed in
++// verify preferences so a client advertises it, but no DSA signature is
++// implemented: a peer that selects it fails the handshake.
++#define SSL_SIGN_DSA_SHA1 0x0202
++
+ // SSL_SIGN_RSA_PKCS1_MD5_SHA1 is an internal signature algorithm used to
+ // specify raw RSASSA-PKCS1-v1_5 with an MD5/SHA-1 concatenation, as used in TLS
+ // before TLS 1.2.
+@@ -5902,8 +5907,16 @@ OPENSSL_EXPORT void SSL_CTX_set_permute_extensions(SSL_CTX *ctx, int enabled);
+ // permute extensions. For now, this is only implemented for the ClientHello.
+ OPENSSL_EXPORT void SSL_set_permute_extensions(SSL *ssl, int enabled);
+ 
++// SSL_CTX_set_client_hello_padding configures whether clients on |ctx| add
++// RFC 7685 padding or pad an otherwise empty last extension. It is enabled by
++// default.
+ OPENSSL_EXPORT void SSL_CTX_set_client_hello_padding(SSL_CTX *ctx, int enabled);
+ 
++// SSL_CTX_set_post_handshake_auth advertises the empty TLS 1.3
++// post_handshake_auth extension on non-QUIC connections. This is disabled by
++// default. Post-handshake CertificateRequest messages are still rejected.
++OPENSSL_EXPORT void SSL_CTX_set_post_handshake_auth(SSL_CTX *ctx, int enabled);
++
+ // SSL_CTX_set_extension_order sets the ClientHello extension order for
+ // connections created from |ctx|. Known IDs keep their given order. Unknown
+ // and duplicate IDs are ignored, and unlisted extensions are appended in
+diff --git a/include/openssl/tls1.h b/include/openssl/tls1.h
+index 66484b7..a4ea29c 100644
+--- a/include/openssl/tls1.h
++++ b/include/openssl/tls1.h
+@@ -107,6 +107,7 @@ extern "C" {
+ #define TLSEXT_TYPE_cookie 44
+ #define TLSEXT_TYPE_psk_key_exchange_modes 45
+ #define TLSEXT_TYPE_certificate_authorities 47
++#define TLSEXT_TYPE_post_handshake_auth 49
+ #define TLSEXT_TYPE_signature_algorithms_cert 50
+ #define TLSEXT_TYPE_key_share 51
+ 
+diff --git a/ssl/extensions.cc b/ssl/extensions.cc
+index b29abd1..27eeb9c 100644
+--- a/ssl/extensions.cc
++++ b/ssl/extensions.cc
+@@ -3877,6 +3877,28 @@ bool ssl_negotiate_alps(SSL_HANDSHAKE *hs, uint8_t *out_alert,
+   return true;
+ }
+ 
++// Post-handshake authentication.
++//
++// https://www.rfc-editor.org/rfc/rfc8446#section-4.2.6
++//
++// The client only advertises the extension. Servers never send it back, so
++// the ServerHello and EncryptedExtensions parsers reject it.
++
++static bool ext_post_handshake_auth_add_clienthello(
++    const SSL_HANDSHAKE *hs, CBB *out, CBB *out_compressible,
++    ssl_client_hello_type_t type) {
++  if (!hs->config->post_handshake_auth || hs->max_version < TLS1_3_VERSION ||
++      SSL_is_quic(hs->ssl)) {
++    return true;
++  }
++
++  if (!CBB_add_u16(out, TLSEXT_TYPE_post_handshake_auth) ||
++      !CBB_add_u16(out, 0 /* length */)) {
++    return false;
++  }
++  return true;
++}
++
+ // Client certificate type & Server certificate type
+ //
+ // https://www.rfc-editor.org/rfc/rfc7250.html#section-3
+@@ -4356,6 +4378,13 @@ static const struct tls_extension kExtensions[] = {
+         ext_server_padding_parse_clienthello,
+         ext_server_padding_add_serverhello,
+     },
++    {
++        TLSEXT_TYPE_post_handshake_auth,
++        ext_post_handshake_auth_add_clienthello,
++        forbid_parse_serverhello,
++        ignore_parse_clienthello,
++        dont_add_serverhello,
++    },
+ };
+ 
+ #define kNumExtensions (sizeof(kExtensions) / sizeof(struct tls_extension))
+@@ -4507,7 +4536,7 @@ bool ssl_client_hello_extension_was_sent(const SSL_HANDSHAKE *hs,
+                                          uint16_t value) {
+   uint32_t index;
+   return tls_extension_find(&index, value) != nullptr &&
+-         (hs->extensions.sent & (1u << index)) != 0;
++         (hs->extensions.sent & (uint64_t{1} << index)) != 0;
+ }
+ 
+ static bool add_padding_extension(CBB *cbb, uint16_t ext, size_t len) {
+@@ -4574,7 +4603,7 @@ static bool ssl_add_clienthello_tlsext_inner(SSL_HANDSHAKE *hs, CBB *out,
+     // The callback may write to at most one output.
+     assert(bytes_written == 0 || bytes_written_compressed == 0);
+     if (bytes_written != 0 || bytes_written_compressed != 0) {
+-      hs->inner_extensions_sent |= (1u << i);
++      hs->inner_extensions_sent |= (uint64_t{1} << i);
+     }
+     // If compressed, update the running ech_outer_extensions extension.
+     if (bytes_written_compressed != 0 &&
+@@ -4704,7 +4733,7 @@ bool ssl_add_clienthello_tlsext(SSL_HANDSHAKE *hs, CBB *out, CBB *out_encoded,
+ 
+     const size_t bytes_written = CBB_len(&extensions) - len_before;
+     if (bytes_written != 0) {
+-      hs->extensions.sent |= (1u << i);
++      hs->extensions.sent |= (uint64_t{1} << i);
+     }
+     // If the difference in lengths is only four bytes then the extension had
+     // an empty body.
+@@ -4752,7 +4781,7 @@ bool ssl_add_clienthello_tlsext(SSL_HANDSHAKE *hs, CBB *out, CBB *out_encoded,
+     if (new_len != old_len) {
+       uint8_t *data = CBB_data(&extensions);
+       std::rotate(data + ech_offset, data + old_len, data + new_len);
+-      hs->extensions.sent |= (1u << ech_index);
++      hs->extensions.sent |= (uint64_t{1} << ech_index);
+     }
+   }
+   if (may_pad) {
+@@ -4816,7 +4845,7 @@ bool ssl_add_serverhello_tlsext(SSL_HANDSHAKE *hs, CBB *out) {
+   }
+ 
+   for (unsigned i = 0; i < kNumExtensions; i++) {
+-    if (!(hs->extensions.received & (1u << i))) {
++    if (!(hs->extensions.received & (uint64_t{1} << i))) {
+       // Don't send extensions that were not received.
+       continue;
+     }
+@@ -4865,7 +4894,7 @@ static bool ssl_scan_clienthello_tlsext(SSL_HANDSHAKE *hs,
+       continue;
+     }
+ 
+-    hs->extensions.received |= (1u << ext_index);
++    hs->extensions.received |= (uint64_t{1} << ext_index);
+     uint8_t alert = SSL_AD_DECODE_ERROR;
+     if (!ext->parse_clienthello(hs, &alert, &extension)) {
+       *out_alert = alert;
+@@ -4876,7 +4905,7 @@ static bool ssl_scan_clienthello_tlsext(SSL_HANDSHAKE *hs,
+   }
+ 
+   for (size_t i = 0; i < kNumExtensions; i++) {
+-    if (hs->extensions.received & (1u << i)) {
++    if (hs->extensions.received & (uint64_t{1} << i)) {
+       continue;
+     }
+ 
+@@ -4890,7 +4919,7 @@ static bool ssl_scan_clienthello_tlsext(SSL_HANDSHAKE *hs,
+       CBS_init(&fake_contents, kFakeRenegotiateExtension,
+                sizeof(kFakeRenegotiateExtension));
+       contents = &fake_contents;
+-      hs->extensions.received |= (1u << i);
++      hs->extensions.received |= (uint64_t{1} << i);
+     }
+ 
+     // Extension wasn't observed so call the callback with a NULL
+@@ -4932,7 +4961,7 @@ static bool ssl_scan_serverhello_tlsext(SSL_HANDSHAKE *hs, const CBS *cbs,
+     return false;
+   }
+ 
+-  uint32_t received = 0;
++  uint64_t received = 0;
+   while (CBS_len(&extensions) != 0) {
+     uint16_t type;
+     CBS extension;
+@@ -4958,7 +4987,7 @@ static bool ssl_scan_serverhello_tlsext(SSL_HANDSHAKE *hs, const CBS *cbs,
+     static_assert(kNumExtensions <= sizeof(hs->extensions.sent) * 8,
+                   "too many bits");
+ 
+-    if (!(hs->extensions.sent & (1u << ext_index))) {
++    if (!(hs->extensions.sent & (uint64_t{1} << ext_index))) {
+       // If the extension was never sent then it is illegal.
+       OPENSSL_PUT_ERROR(SSL, SSL_R_UNEXPECTED_EXTENSION);
+       ERR_add_error_dataf("extension %u", (unsigned)type);
+@@ -4966,7 +4995,7 @@ static bool ssl_scan_serverhello_tlsext(SSL_HANDSHAKE *hs, const CBS *cbs,
+       return false;
+     }
+ 
+-    received |= (1u << ext_index);
++    received |= (uint64_t{1} << ext_index);
+ 
+     uint8_t alert = SSL_AD_DECODE_ERROR;
+     if (!ext->parse_serverhello(hs, &alert, &extension)) {
+@@ -4978,7 +5007,7 @@ static bool ssl_scan_serverhello_tlsext(SSL_HANDSHAKE *hs, const CBS *cbs,
+   }
+ 
+   for (size_t i = 0; i < kNumExtensions; i++) {
+-    if (!(received & (1u << i))) {
++    if (!(received & (uint64_t{1} << i))) {
+       // Extension wasn't observed so call the callback with a NULL
+       // parameter.
+       uint8_t alert = SSL_AD_DECODE_ERROR;
+diff --git a/ssl/internal.h b/ssl/internal.h
+index c940f6f..b52da10 100644
+--- a/ssl/internal.h
++++ b/ssl/internal.h
+@@ -1937,15 +1937,15 @@ struct SSL_HANDSHAKE {
+     // sent is a bitset where the bits correspond to elements of kExtensions
+     // in extensions.cc. Each bit is set if that extension was sent in a
+     // ClientHello. It's not used by servers.
+-    uint32_t sent = 0;
++    uint64_t sent = 0;
+     // received is a bitset, like `sent`, but is used by servers to record
+     // which extensions were received from a client.
+-    uint32_t received;
++    uint64_t received;
+   } extensions;
+ 
+   // inner_extensions_sent, on clients that offer ECH, is `extensions.sent` for
+   // the ClientHelloInner.
+-  uint32_t inner_extensions_sent = 0;
++  uint64_t inner_extensions_sent = 0;
+ 
+   // early_data_written is the amount of early data that has been written by the
+   // record layer.
+@@ -3766,6 +3766,9 @@ struct SSL_CONFIG {
+   uint16_t record_size_limit = 0;
+   bool client_hello_padding = true;
+ 
++  // Whether to advertise the TLS 1.3 post_handshake_auth extension.
++  bool post_handshake_auth = false;
++
+   // delegated_credentials, if not empty, is the set of signature algorithms
+   // supported by the client.
+   Array<uint16_t> delegated_credentials;
+@@ -4531,6 +4534,9 @@ class SSLContext : public ssl_ctx_st, public RefCounted<SSLContext> {
+   uint16_t record_size_limit = 0;
+   bool client_hello_padding = true;
+ 
++  // Whether to advertise the TLS 1.3 post_handshake_auth extension.
++  bool post_handshake_auth = false;
++
+   // delegated_credentials, if not empty, is the set of signature algorithms
+   // supported by the client.
+   bssl::Array<uint16_t> delegated_credentials;
+diff --git a/ssl/ssl_lib.cc b/ssl/ssl_lib.cc
+index 2e4964c..c0bd107 100644
+--- a/ssl/ssl_lib.cc
++++ b/ssl/ssl_lib.cc
+@@ -570,6 +570,7 @@ SSL *SSL_new(SSL_CTX *ctx) {
+   ssl->quic_method = ctx_impl->quic_method;
+   ssl->config->record_size_limit = ctx_impl->record_size_limit;
+   ssl->config->client_hello_padding = ctx_impl->client_hello_padding;
++  ssl->config->post_handshake_auth = ctx_impl->post_handshake_auth;
+ 
+   if (!ssl->method->ssl_new(ssl.get()) ||
+       !ssl->ctx->x509_method->ssl_new(ssl->s3->hs.get())) {
+@@ -3382,6 +3383,10 @@ void SSL_CTX_set_client_hello_padding(SSL_CTX *ctx, int enabled) {
+   FromOpaque(ctx)->client_hello_padding = !!enabled;
+ }
+ 
++void SSL_CTX_set_post_handshake_auth(SSL_CTX *ctx, int enabled) {
++  FromOpaque(ctx)->post_handshake_auth = !!enabled;
++}
++
+ int SSL_CTX_set_extension_order(SSL_CTX *ctx, const uint16_t *ids, int num) {
+   Array<uint16_t> order;
+   if (num > 0) {
+diff --git a/ssl/ssl_privkey.cc b/ssl/ssl_privkey.cc
+index af40dd5..f10762e 100644
+--- a/ssl/ssl_privkey.cc
++++ b/ssl/ssl_privkey.cc
+@@ -511,6 +511,7 @@ static const SignatureAlgorithmName kSignatureAlgorithmNames[] = {
+     {SSL_SIGN_RSA_PKCS1_SHA384, "rsa_pkcs1_sha384"},
+     {SSL_SIGN_RSA_PKCS1_SHA512, "rsa_pkcs1_sha512"},
+     {SSL_SIGN_ECDSA_SHA1, "ecdsa_sha1"},
++    {SSL_SIGN_DSA_SHA1, "dsa_sha1"},
+     {SSL_SIGN_ECDSA_SECP256R1_SHA256, "ecdsa_secp256r1_sha256"},
+     {SSL_SIGN_ECDSA_SECP384R1_SHA384, "ecdsa_secp384r1_sha384"},
+     {SSL_SIGN_ECDSA_SECP521R1_SHA512, "ecdsa_secp521r1_sha512"},
+@@ -598,7 +599,10 @@ static bool set_sigalg_prefs(Array<uint16_t> *out, Span<const uint16_t> prefs) {
+       // abstraction.
+       continue;
+     }
+-    if (get_signature_algorithm(pref) == nullptr) {
++    // `SSL_SIGN_DSA_SHA1` has no implementation. It is kept so a client can
++    // advertise it; `ssl_pkey_supports_algorithm` rejects it if selected.
++    if (get_signature_algorithm(pref) == nullptr &&
++        pref != SSL_SIGN_DSA_SHA1) {
+       OPENSSL_PUT_ERROR(SSL, SSL_R_INVALID_SIGNATURE_ALGORITHM);
+       return false;
+     }

@@ -645,6 +645,61 @@ fn client_hello_extension_types(hello: &[u8]) -> Vec<ExtensionType> {
 }
 
 #[test]
+fn schannel_client_hello_options() {
+    let order = [
+        ExtensionType::SUPPORTED_VERSIONS,
+        ExtensionType::POST_HANDSHAKE_AUTH,
+        ExtensionType::SIGNATURE_ALGORITHMS,
+    ];
+    for (version, enabled) in [
+        (SslVersion::TLS1_3, false),
+        (SslVersion::TLS1_2, true),
+        (SslVersion::TLS1_3, true),
+    ] {
+        let hello = Arc::new(Mutex::new(None));
+        let mut server = Server::builder();
+        server.ctx().set_select_certificate_callback({
+            let hello = Arc::clone(&hello);
+            move |client_hello| {
+                *hello.lock().unwrap() = Some((
+                    client_hello_extension_types(client_hello.as_bytes()),
+                    client_hello
+                        .get_extension(ExtensionType::POST_HANDSHAKE_AUTH)
+                        .map(ToOwned::to_owned),
+                    signature_algorithm_ids(
+                        client_hello
+                            .get_extension(ExtensionType::SIGNATURE_ALGORITHMS)
+                            .unwrap(),
+                    ),
+                ));
+                Ok(())
+            }
+        });
+        let server = server.build();
+        let mut client = server.client_with_root_ca();
+        client.ctx().set_max_proto_version(Some(version)).unwrap();
+        client.ctx().set_extension_permutation(&order).unwrap();
+        if enabled {
+            client.ctx().set_post_handshake_auth(true);
+            client
+                .ctx()
+                .set_sigalgs_list("dsa_sha1:rsa_pss_rsae_sha256:rsa_pkcs1_sha256")
+                .unwrap();
+        }
+        client.connect();
+
+        let (types, auth, sigalgs) = hello.lock().unwrap().take().unwrap();
+        if enabled && version == SslVersion::TLS1_3 {
+            assert_eq!(&types[..order.len()], &order);
+            assert_eq!(auth.as_deref(), Some(&[][..]));
+        } else {
+            assert!(auth.is_none());
+        }
+        assert_eq!(sigalgs.contains(&SslSignatureAlgorithm::DSA_SHA1.0), enabled);
+    }
+}
+
+#[test]
 fn record_size_limit_patch_keeps_configured_extension_position() {
     // 0004-boringssl-extension-order.patch sends the listed extensions first.
     // 0005-record-size-limit.patch must keep its slot in that prefix when the

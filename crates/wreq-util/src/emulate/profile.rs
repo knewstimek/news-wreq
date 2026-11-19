@@ -13,11 +13,12 @@ use wreq::{
     Group,
     header::{ACCEPT, ACCEPT_LANGUAGE, HeaderMap, HeaderName, HeaderValue, USER_AGENT},
     http2::{
-        Http2Options, Priorities, Priority, PseudoId, PseudoOrder, SettingId, SettingsOrder,
-        StreamDependency, StreamId,
+        HeadersDependency, HeadersPriority, Http2Options, Priorities, Priority, PseudoId,
+        PseudoOrder, SettingId, SettingsOrder, StreamDependency, StreamId,
     },
     tls::{
-        AlpnProtocol, AlpsProtocol, ExtensionType, KeyShare, TlsOptions, TlsVersion,
+        AlpnProtocol, AlpsProtocol, EchGrease, EchGreaseAead, ExtensionType, KeyShare, Tls13Cipher,
+        TlsOptions, TlsVersion,
         compress::CertificateCompressor,
     },
 };
@@ -26,6 +27,12 @@ use super::{
     Emulation, Platform,
     compress::{BrotliCompressor, ZlibCompressor, ZstdCompressor},
 };
+
+const AES_FIRST_TLS13_CIPHERS: &[Tls13Cipher] = &[
+    Tls13Cipher::AES_128_GCM_SHA256,
+    Tls13Cipher::AES_256_GCM_SHA384,
+    Tls13Cipher::CHACHA20_POLY1305_SHA256,
+];
 
 fn build_standard_emulation(
     group: &'static str,

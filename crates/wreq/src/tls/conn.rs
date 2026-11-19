@@ -431,6 +431,8 @@ impl TlsConnectorBuilder {
 
         // Set TLS permute extensions options
         set_option!(opts, permute_extensions, connector, set_permute_extensions);
+        set_option!(opts, client_hello_padding, connector, set_client_hello_padding);
+        set_option!(opts, post_handshake_auth, connector, set_post_handshake_auth);
 
         // Set TLS curves list
         set_option_ref_try!(opts, curves_list, connector, set_curves_list);

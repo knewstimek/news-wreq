@@ -55,7 +55,7 @@ impl From<OkHttpTlsConfig> for TlsOptions {
             .cipher_list(val.cipher_list)
             .min_tls_version(TlsVersion::TLS_1_2)
             .max_tls_version(TlsVersion::TLS_1_3)
-            .aes_hw_override(true)
+            .tls13_cipher_list(AES_FIRST_TLS13_CIPHERS)
             .build()
     }
 }

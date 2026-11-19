@@ -1,5 +1,11 @@
 use super::*;
 
+const TLS13_CIPHERS: &[Tls13Cipher] = &[
+    Tls13Cipher::AES_128_GCM_SHA256,
+    Tls13Cipher::CHACHA20_POLY1305_SHA256,
+    Tls13Cipher::AES_256_GCM_SHA384,
+];
+
 macro_rules! tls_options {
     (@build $builder:expr) => {
         $builder.build().into()
@@ -247,7 +253,7 @@ impl From<FirefoxTlsConfig> for TlsOptions {
             .delegated_credentials(val.delegated_credentials)
             .record_size_limit(val.record_size_limit)
             .enable_ocsp_stapling(true)
-            .enable_ech_grease(val.enable_ech_grease)
+            .ech_grease(val.enable_ech_grease.then_some(EchGrease::NssPre3127))
             .enable_signed_cert_timestamps(val.enable_signed_cert_timestamps)
             .alpn_protocols([AlpnProtocol::HTTP2, AlpnProtocol::HTTP1])
             .min_tls_version(TlsVersion::TLS_1_2)
@@ -255,10 +261,8 @@ impl From<FirefoxTlsConfig> for TlsOptions {
             .pre_shared_key(val.pre_shared_key)
             .psk_skip_session_ticket(val.psk_skip_session_tickets)
             .psk_dhe_ke(val.psk_dhe_ke)
-            .preserve_tls13_cipher_list(true)
-            .extension_permutation(val.extension_permutation)
-            .aes_hw_override(true)
-            .random_aes_hw_override(true);
+            .tls13_cipher_list(TLS13_CIPHERS)
+            .extension_permutation(val.extension_permutation);
 
         if let Some(key_shares) = val.key_shares {
             builder = builder.key_shares(key_shares)

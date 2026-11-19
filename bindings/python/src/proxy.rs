@@ -1,0 +1,123 @@
+use derive_deftly::Deftly;
+use pyo3::{prelude::*, pybacked::PyBackedStr};
+use wreq::header::HeaderValue;
+
+use crate::{error::Error, extractor::Text, header::HeaderMap};
+
+/// A builder for `Proxy`.
+#[derive(Default, Deftly)]
+#[derive_deftly(ExtractOptions)]
+#[deftly(deny_unknown)]
+struct Builder {
+    // Optional username for proxy authentication.
+    username: Option<PyBackedStr>,
+
+    // Optional password for proxy authentication.
+    password: Option<PyBackedStr>,
+
+    // Optional custom HTTP authentication header.
+    custom_http_auth: Option<Text>,
+
+    /// Optional custom HTTP headers for the proxy.
+    custom_http_headers: Option<HeaderMap>,
+
+    // Optional exclusion list for the proxy.
+    exclusion: Option<PyBackedStr>,
+}
+
+/// A proxy server for a request.
+/// Supports HTTP, HTTPS, SOCKS4, SOCKS4a, SOCKS5, and SOCKS5h protocols.
+/// Factory methods reject unknown keyword arguments with `TypeError`.
+#[derive(Clone)]
+#[pyclass(subclass, frozen, str, from_py_object)]
+pub struct Proxy(pub wreq::Proxy);
+
+// ===== impl Proxy =====
+
+#[pymethods]
+impl Proxy {
+    /// Creates a new HTTP proxy.
+    ///
+    /// This method sets up a proxy server for HTTP requests.
+    #[staticmethod]
+    #[pyo3(signature = (url, **kwds))]
+    fn http(py: Python, url: &str, kwds: Option<Builder>) -> PyResult<Self> {
+        create_proxy(py, wreq::Proxy::http, url, kwds)
+    }
+
+    /// Creates a new HTTPS proxy.
+    ///
+    /// This method sets up a proxy server for HTTPS requests.
+    #[staticmethod]
+    #[pyo3(signature = (url, **kwds))]
+    fn https(py: Python, url: &str, kwds: Option<Builder>) -> PyResult<Self> {
+        create_proxy(py, wreq::Proxy::https, url, kwds)
+    }
+
+    /// Creates a new proxy for all protocols.
+    ///
+    /// This method sets up a proxy server for all types of requests (HTTP, HTTPS, etc.).
+    #[staticmethod]
+    #[pyo3(signature = (url, **kwds))]
+    fn all(py: Python, url: &str, kwds: Option<Builder>) -> PyResult<Self> {
+        create_proxy(py, wreq::Proxy::all, url, kwds)
+    }
+
+    /// Creates a new UNIX domain socket proxy.
+    #[staticmethod]
+    #[pyo3(signature = (path, **kwds))]
+    #[cfg_attr(not(unix), allow(unused))]
+    fn unix(py: Python, path: &str, kwds: Option<Builder>) -> PyResult<Self> {
+        #[cfg(not(unix))]
+        {
+            Err(pyo3::exceptions::PyRuntimeError::new_err(
+                "UNIX domain socket proxies are not supported on this platform.",
+            ))
+        }
+
+        #[cfg(unix)]
+        create_proxy(py, wreq::Proxy::unix, path, kwds)
+    }
+}
+
+impl_print_str!(Debug, Proxy);
+
+fn create_proxy<'py>(
+    py: Python<'py>,
+    proxy_fn: fn(&'py str) -> wreq::Result<wreq::Proxy>,
+    url: &'py str,
+    builder: Option<Builder>,
+) -> PyResult<Proxy> {
+    py.detach(|| {
+        // Create base proxy using the provided constructor (http, https, all)
+        let mut proxy = proxy_fn(url).map_err(Error::Library)?;
+
+        if let Some(builder) = builder {
+            // Convert the username and password to a basic auth header value.
+            if let Some((username, password)) = builder.username.zip(builder.password) {
+                proxy = proxy.basic_auth(username.as_ref(), password.as_ref());
+            }
+
+            // Convert the custom HTTP auth string to a header value.
+            if let Some(Ok(custom_http_auth)) = builder
+                .custom_http_auth
+                .map(|value| value.0)
+                .map(HeaderValue::from_maybe_shared)
+            {
+                proxy = proxy.custom_http_auth(custom_http_auth);
+            }
+
+            // Convert the custom HTTP headers to a HeaderMap instance.
+            if let Some(custom_http_headers) = builder.custom_http_headers {
+                proxy = proxy.custom_http_headers(custom_http_headers.0);
+            }
+
+            // Convert the exclusion list string to a NoProxy instance.
+            if let Some(exclusion) = builder.exclusion {
+                proxy = proxy.no_proxy(wreq::NoProxy::from_string(exclusion.as_ref()));
+            }
+        }
+
+        Ok(Proxy(proxy))
+    })
+}

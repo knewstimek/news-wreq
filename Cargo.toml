@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "bindings/python",
     "crates/wreq",
     "crates/wreq-util",
     "crates/btls/btls",

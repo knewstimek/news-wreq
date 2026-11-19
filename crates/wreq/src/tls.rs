@@ -229,6 +229,14 @@ pub struct TlsOptions {
     /// **Default:** `None` (implementation default)
     pub permute_extensions: Option<bool>,
 
+    /// Controls RFC 7685 ClientHello padding, which is enabled by default.
+    pub client_hello_padding: Option<bool>,
+
+    /// Advertises the TLS 1.3 `post_handshake_auth` extension when enabled.
+    ///
+    /// Post-handshake CertificateRequest messages are still rejected.
+    pub post_handshake_auth: Option<bool>,
+
     /// Controls whether GREASE extensions ([RFC 8701](https://datatracker.ietf.org/doc/html/rfc8701))
     /// are enabled in general.
     ///
@@ -406,6 +414,20 @@ impl TlsOptionsBuilder {
         T: Into<Option<bool>>,
     {
         self.config.permute_extensions = permute.into();
+        self
+    }
+
+    /// Controls RFC 7685 ClientHello padding.
+    #[inline]
+    pub fn client_hello_padding(mut self, enabled: impl Into<Option<bool>>) -> Self {
+        self.config.client_hello_padding = enabled.into();
+        self
+    }
+
+    /// Controls advertisement of the TLS 1.3 `post_handshake_auth` extension.
+    #[inline]
+    pub fn post_handshake_auth(mut self, enabled: impl Into<Option<bool>>) -> Self {
+        self.config.post_handshake_auth = enabled.into();
         self
     }
 
@@ -614,6 +636,8 @@ impl Default for TlsOptions {
             max_tls_version: None,
             ech_grease: None,
             permute_extensions: None,
+            client_hello_padding: None,
+            post_handshake_auth: None,
             grease_enabled: None,
             grease_sigalgs_enabled: None,
             enable_ocsp_stapling: false,

@@ -1,0 +1,79 @@
+[package]
+name = "wreq-python"
+version = "0.13.0"
+description = "An ergonomic, privacy-aware Python HTTP Client"
+license = "Apache-2.0"
+publish = false
+readme = "README.md"
+repository = "https://github.com/0x676e67/wreq-python"
+authors = ["0x676e67 <gngppz@gmail.com>"]
+edition = "2024"
+rust-version = "1.98"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+name = "wreq"
+crate-type = ["cdylib"]
+doctest = false
+
+[features]
+default = ["abi3-py311"]
+
+# Memory allocator options
+jemalloc = ["dep:tikv-jemallocator"]
+mimalloc = ["dep:mimalloc"]
+
+# we build cp311-abi3 and cp310 wheels now, move this to pyo3 after we drop cp310
+abi3-py311 = ["pyo3/abi3-py311"]
+abi3-py313 = ["pyo3/abi3-py313"]
+abi3-py314 = ["pyo3/abi3-py314"]
+
+[dependencies]
+derive-deftly = { version = "1.14.0", default-features = false, features = ["minimal-1"] }
+pingora-runtime = "0.9.0"
+tokio = { version = "1.53.2", features = ["rt-multi-thread", "sync", "time", "net", "macros"] }
+tokio-util = { version = "0.7.18", features = ["rt"] }
+pyo3 = { version = "0.30.1", features = [
+    "indexmap",
+    "multiple-pymethods",
+    "extension-module",
+    "generate-import-lib",
+] }
+futures-util = { version = "0.3.33", default-features = false, features = ["std", "sink"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1"
+serde_urlencoded = "0.7.1"
+indexmap = { version = "2.13.0", features = ["serde"] }
+bytes = "1.12.1"
+http = "1.4.2"
+http-body = "1.1.0"
+http-body-util = "0.1.4"
+wreq = { path = "../../crates/wreq", version = "0.16.1", default-features = false, features = [
+    "parking_lot",
+    "webpki-roots",
+    "tokio-rt",
+    "http2",
+    "query",
+    "form",
+    "json",
+    "socks",
+    "system-proxy",
+    "stream",
+    "multipart",
+    "cookies",
+    "charset",
+    "gzip",
+    "brotli",
+    "deflate",
+    "zstd",
+    "ws",
+] }
+wreq-util = { path = "../../crates/wreq-util", version = "0.2.0", features = ["emulation-compression", "emulation-chromium-pki"] }
+hickory-resolver = "0.26.3"
+cookie = "0.18.2"
+mimalloc = { version = "0.1.43", default-features = false, features = [
+    "local_dynamic_tls",
+], optional = true }
+tikv-jemallocator = { version = "0.7.0", default-features = false, features = [
+    "disable_initial_exec_tls",
+], optional = true }

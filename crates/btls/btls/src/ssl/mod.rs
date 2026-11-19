@@ -701,6 +701,9 @@ impl ExtensionType {
     pub const CHANNEL_ID: Self = Self(ffi::TLSEXT_TYPE_channel_id as u16);
     #[cfg(not(feature = "fips"))]
     pub const RECORD_SIZE_LIMIT: Self = Self(ffi::TLSEXT_TYPE_record_size_limit as u16);
+    /// The TLS 1.3 post-handshake authentication extension.
+    #[cfg(not(feature = "fips"))]
+    pub const POST_HANDSHAKE_AUTH: Self = Self(ffi::TLSEXT_TYPE_post_handshake_auth as u16);
     pub const SERVER_PADDING: Self = Self(ffi::TLSEXT_TYPE_server_padding as u16);
 
     /// Returns the wire extension type.
@@ -828,6 +831,11 @@ impl SslSignatureAlgorithm {
 
     pub const RSA_PKCS1_MD5_SHA1: SslSignatureAlgorithm =
         SslSignatureAlgorithm(ffi::SSL_SIGN_RSA_PKCS1_MD5_SHA1 as _);
+
+    /// A legacy codepoint that can be advertised in the ClientHello.
+    #[cfg(not(feature = "fips"))]
+    pub const DSA_SHA1: SslSignatureAlgorithm =
+        SslSignatureAlgorithm(ffi::SSL_SIGN_DSA_SHA1 as _);
 
     pub const ECDSA_SHA1: SslSignatureAlgorithm =
         SslSignatureAlgorithm(ffi::SSL_SIGN_ECDSA_SHA1 as _);
@@ -2358,6 +2366,16 @@ impl SslContextBuilder {
     #[corresponds(SSL_CTX_set_client_hello_padding)]
     pub fn set_client_hello_padding(&mut self, enabled: bool) {
         unsafe { ffi::SSL_CTX_set_client_hello_padding(self.as_ptr(), enabled as _) }
+    }
+
+    /// Controls whether non-QUIC TLS 1.3 clients advertise the empty
+    /// post-handshake authentication extension. Disabled by default.
+    ///
+    /// A post-handshake CertificateRequest is still rejected.
+    #[cfg(not(feature = "fips"))]
+    #[corresponds(SSL_CTX_set_post_handshake_auth)]
+    pub fn set_post_handshake_auth(&mut self, enabled: bool) {
+        unsafe { ffi::SSL_CTX_set_post_handshake_auth(self.as_ptr(), enabled as _) }
     }
 
     /// Sets the context's supported signature verification algorithms.
