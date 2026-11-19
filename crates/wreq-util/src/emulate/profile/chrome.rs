@@ -2006,7 +2006,7 @@ mod_generator!(
 
 mod_generator!(
     v157,
-    tls_options!(9, CURVES_3, sorted_trust_anchors()),
+    tls_options!(9, CURVES_3, sorted_trust_anchors(), server_padding = 0),
     http2_options!(3),
     header_initializer_chrome157,
     [

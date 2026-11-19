@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 import wreq
-from wreq.emulation import Emulation
+from wreq.emulation import Emulation, Platform
 from wreq.exceptions import ConnectionError, ConnectionResetError, TlsError
 from wreq.tls import CertStore, ExtensionType, Tls13Cipher, TlsOptions, TlsVersion
 
@@ -79,8 +79,7 @@ async def test_local_emulation_profiles_build_clients():
             pass
 
 
-@pytest.mark.asyncio
-async def test_schannel_client_hello():
+async def capture_client_hello(**client_options):
     captured = asyncio.get_running_loop().create_future()
 
     async def read_hello(reader, writer):
@@ -94,6 +93,35 @@ async def test_schannel_client_hello():
 
     listener = await asyncio.start_server(read_hello, "127.0.0.1", 0)
     port = listener.sockets[0].getsockname()[1]
+    async with listener, wreq.Client(no_proxy=True, **client_options) as client:
+        with pytest.raises((TlsError, ConnectionError, ConnectionResetError)):
+            await asyncio.wait_for(client.get(f"https://127.0.0.1:{port}"), 5)
+        return await asyncio.wait_for(captured, 5)
+
+
+def parse_client_hello(hello):
+    def read_u16(offset):
+        return int.from_bytes(hello[offset : offset + 2], "big")
+
+    assert hello[0] == 1  # ClientHello handshake message
+    offset = 4 + 2 + 32
+    offset += 1 + hello[offset]
+    cipher_suites = hello[offset + 2 : offset + 2 + read_u16(offset)]
+    offset += 2 + read_u16(offset)
+    offset += 1 + hello[offset]
+    end = offset + 2 + read_u16(offset)
+    offset += 2
+    extensions = {}
+    while offset < end:
+        extension, length = read_u16(offset), read_u16(offset + 2)
+        offset += 4
+        extensions[extension] = hello[offset : offset + length]
+        offset += length
+    return cipher_suites, extensions
+
+
+@pytest.mark.asyncio
+async def test_schannel_client_hello():
     options = TlsOptions(
         min_tls_version=TlsVersion.TLS_1_3,
         client_hello_padding=False,
@@ -106,30 +134,22 @@ async def test_schannel_client_hello():
             ExtensionType.SIGNATURE_ALGORITHMS,
         ],
     )
-    async with listener, wreq.Client(tls_options=options, no_proxy=True) as client:
-        with pytest.raises((TlsError, ConnectionError, ConnectionResetError)):
-            await asyncio.wait_for(client.get(f"https://127.0.0.1:{port}"), 5)
-        hello = await asyncio.wait_for(captured, 5)
+    hello = await capture_client_hello(tls_options=options)
+    cipher_suites, extensions = parse_client_hello(hello)
 
-    def read_u16(offset):
-        return int.from_bytes(hello[offset : offset + 2], "big")
-
-    assert hello[0] == 1  # ClientHello handshake message
-    offset = 4 + 2 + 32
-    offset += 1 + hello[offset]
-    assert hello[offset + 2 : offset + 2 + read_u16(offset)] == b"\x13\x01"
-    offset += 2 + read_u16(offset)
-    offset += 1 + hello[offset]
-    end = offset + 2 + read_u16(offset)
-    offset += 2
-    extensions = {}
-    while offset < end:
-        extension, length = read_u16(offset), read_u16(offset + 2)
-        offset += 4
-        extensions[extension] = hello[offset : offset + length]
-        offset += length
-
+    assert cipher_suites == b"\x13\x01"
     assert list(extensions)[:3] == [43, 49, 13]
     assert extensions[49] == b""
     assert 21 not in extensions
     assert extensions[13][2:4] == b"\x02\x02"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("profile", "expected"),
+    [(Emulation.Chrome156, None), (Emulation.Chrome157, b"\x00\x00")],
+)
+async def test_chrome_server_padding(profile, expected):
+    hello = await capture_client_hello(emulation=Emulation(profile, Platform.Windows))
+    _, extensions = parse_client_hello(hello)
+    assert extensions.get(4832) == expected

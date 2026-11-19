@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "wreq"
-version = "0.13.0+news.1"
+version = "0.13.0+news.2"
 requires-python = ">=3.11"
 classifiers = [
   "Programming Language :: Rust",

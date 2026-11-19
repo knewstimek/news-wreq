@@ -40,7 +40,7 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/wreq-wheel-test"
           source "$RUNNER_TEMP/wreq-wheel-test/bin/activate"
           python -m pip install dist/*.whl pytest pytest-asyncio
-          python -m pytest -q bindings/python/tests/tls_test.py -k 'schannel_client_hello or local_emulation_profiles or trust_anchors'
+          python -m pytest -q bindings/python/tests/tls_test.py -k 'schannel_client_hello or local_emulation_profiles or trust_anchors or chrome_server_padding'
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
