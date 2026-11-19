@@ -52,7 +52,7 @@ macro_rules! tls_options {
     (9, $curves:expr) => {
         tls_options!(9, $curves, shuffled_trust_anchors(crate::rand::fast_random))
     };
-    (9, $curves:expr, $trust_anchors:expr $(, server_padding = $padding:expr)?) => {
+    (9, $curves:expr, $trust_anchors:expr) => {
         tls_options!(@build ChromeTlsConfig::builder()
             .permute_extensions(true)
             .enable_ech_grease(true)
@@ -61,7 +61,6 @@ macro_rules! tls_options {
             .sigalgs_list(NEW_SIGALGS_LIST)
             .trust_anchors($trust_anchors)
             .grease_sigalgs_enabled(true)
-            $(.server_padding($padding))?
             .alps_use_new_codepoint(true))
     };
 }
@@ -204,9 +203,6 @@ pub struct ChromeTlsConfig {
 
     #[builder(default, setter(strip_option))]
     grease_sigalgs_enabled: Option<bool>,
-
-    #[builder(default, setter(strip_option))]
-    server_padding: Option<u16>,
 }
 
 impl From<ChromeTlsConfig> for TlsOptions {
@@ -222,7 +218,6 @@ impl From<ChromeTlsConfig> for TlsOptions {
             .max_tls_version(TlsVersion::TLS_1_3)
             .permute_extensions(val.permute_extensions)
             .pre_shared_key(val.pre_shared_key)
-            .server_padding(val.server_padding)
             .ech_grease(
                 val.enable_ech_grease
                     .then_some(EchGrease::Aead(EchGreaseAead::AES_128_GCM)),
