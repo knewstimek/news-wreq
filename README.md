@@ -1,8 +1,15 @@
 # news-wreq
 
-Cargo workspace for the wreq HTTP client, wreq-util, and btls. The
-workspace resolves these packages from its local source tree. The upstream
-package names are retained so callers can use the existing crate names.
+news-wreq is an independently maintained fork of [wreq](https://github.com/0x676e67/wreq).
+It brings wreq, wreq-util, and btls into one Cargo workspace and retains the
+existing crate names.
+
+## Why this fork exists
+
+We use this fork to ship updates quickly on our own release schedule. We take
+responsibility for reviewing, testing, and supporting the changes we ship,
+including AI-assisted work. When we contribute upstream, we follow that
+project's contribution guidelines.
 
 ## Source revisions
 
