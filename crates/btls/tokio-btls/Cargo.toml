@@ -1,0 +1,48 @@
+[package]
+name = "tokio-btls"
+version = { workspace = true }
+authors = ["0x676e67 <gngppz@gmail.com>", "Alex Crichton <alex@alexcrichton.com>", "Ivan Nikulin <ifaaan@gmail.com>"]
+license = "MIT OR Apache-2.0"
+edition = { workspace = true }
+rust-version = { workspace = true }
+repository = { workspace = true }
+homepage = "https://github.com/0x676e67/btls"
+documentation = "https://docs.rs/tokio-btls"
+description = """
+An implementation of SSL streams for Tokio backed by BoringSSL
+"""
+include = [
+    "/*.md",
+    "/*.toml",
+    "/LICENSE-*",
+    "/src",
+    # Read by the unit tests in src/tests.rs.
+    "/tests/*.pem",
+]
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]
+
+[features]
+default = ["btls/default"]
+
+# Use a FIPS-validated version of boringssl.
+fips = ["btls/fips"]
+
+# Enables Raw public key API (https://datatracker.ietf.org/doc/html/rfc7250)
+rpk = ["btls/rpk"]
+
+# Build BoringSSL with its native symbol-prefixing support, so its symbols don't
+# collide with an OpenSSL linked into the same process. Needs Go and clang at
+# build time, and cannot be combined with `fips` or `BORING_BSSL_SOURCE_PATH`.
+prefix-symbols = ["btls/prefix-symbols"]
+
+[dependencies]
+btls = { workspace = true }
+btls-sys = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+foreign-types = { workspace = true }
+futures = { workspace = true }
+tokio = { workspace = true, features = [ "full" ] }

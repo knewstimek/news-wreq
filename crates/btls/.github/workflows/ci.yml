@@ -1,0 +1,820 @@
+name: CI
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
+      - ".github/**"
+      - "README.md"
+  workflow_dispatch:
+
+env:
+  RUSTFLAGS: -Dwarnings
+  RUST_BACKTRACE: 1
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: 0
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  rustfmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rustfmt
+        run: rustup default stable && rustup component add rustfmt
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    env:
+      CARGO_HOME: ${{ github.workspace }}/.cache/cargo
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: "recursive"
+      - name: Install Rust
+        run: rustup toolchain add stable --no-self-update --component clippy && rustup default stable
+      - name: Get rust version
+        id: rust-version
+        shell: bash
+        run: |
+          echo "version=$(rustc --version)" >> $GITHUB_OUTPUT
+      - name: Cache cargo index
+        uses: actions/cache@v6
+        with:
+          path: |
+            .cache/cargo/registry/index
+            .cache/cargo/registry/cache
+          key: index-${{ steps.rust-version.outputs.version }}-${{ hashFiles('Cargo.toml') }}
+          enableCrossOsArchive: true
+      - name: Fetch dependencies
+        run: cargo fetch
+      - name: Cache target directory
+        uses: actions/cache@v6
+        with:
+          path: target
+          key: clippy-${{ steps.rust-version.outputs.version }}-${{ hashFiles('Cargo.lock') }}
+      - name: Run clippy
+        run: cargo clippy --all --all-targets --features mldsa,mlkem,prf,relax-cert-validation,rpk,underscore-wildcards -- -D warnings
+      - name: Check docs
+        run: cargo doc --no-deps -p btls -p btls-sys --features mldsa,mlkem,rpk,underscore-wildcards
+        env:
+          CARGO_BUILD_RUSTDOCFLAGS: "--cfg=docsrs"
+          RUSTC_BOOTSTRAP: 1
+          DOCS_RS: 1
+      - name: Cargo.toml btls versions consistency
+        shell: bash
+        run: |
+          WORKSPACE_VERSION=$(grep -F '[workspace.package]' -A1 Cargo.toml | grep -F version | grep -Eo '".*"')
+          if [[ -z "$WORKSPACE_VERSION" ]]; then echo 2>&1 "error: can't find btls version"; exit 1; fi
+          if grep -E 'btls.* =' Cargo.toml | grep -vF "$WORKSPACE_VERSION"; then
+            echo 2>&1 "error: btls dependencies must match workspace version $WORKSPACE_VERSION"
+            exit 1
+          fi
+  test:
+    name: Test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        thing:
+          - stable
+          - i686-mingw
+          - arm-android
+          - arm64-android
+          - i686-android
+          - x86_64-android
+          - aarch64-ios
+          - aarch64-ios-sim
+          - x86_64-ios
+          - aarch64-tvos
+          - aarch64-tvos-sim
+          - i686-linux
+          - arm-linux
+          - aarch64-linux
+          - arm64-macos
+          - x86_64-macos
+          - x86_64-mingw
+          - i686-msvc
+          - x86_64-msvc
+          - aarch64-msvc
+        include:
+          - check_only: false
+          - extra_test_args: ""
+          - apt_packages: ""
+          - custom_env: {}
+          - thing: stable
+            target: x86_64-unknown-linux-gnu
+            rust: stable
+            os: ubuntu-latest
+          - thing: arm-android
+            target: armv7-linux-androideabi
+            rust: stable
+            os: ubuntu-latest
+            check_only: true
+          - thing: arm64-android
+            target: aarch64-linux-android
+            rust: stable
+            os: ubuntu-latest
+            check_only: true
+          - thing: i686-android
+            target: i686-linux-android
+            rust: stable
+            os: ubuntu-latest
+            check_only: true
+            custom_env:
+              CXXFLAGS: -msse2
+          - thing: x86_64-android
+            target: x86_64-linux-android
+            rust: stable
+            os: ubuntu-latest
+            check_only: true
+          - thing: aarch64-ios
+            target: aarch64-apple-ios
+            os: macos-latest
+            check_only: true
+            custom_env:
+              IPHONEOS_DEPLOYMENT_TARGET: 17.5
+            # It's... theoretically possible to run tests on iPhone Simulator,
+            # but for now, make sure that BoringSSL only builds.
+          - thing: aarch64-ios-sim
+            target: aarch64-apple-ios-sim
+            os: macos-latest
+            check_only: true
+            custom_env:
+              IPHONEOS_DEPLOYMENT_TARGET: 17.5
+          - thing: x86_64-ios
+            target: x86_64-apple-ios
+            os: macos-latest
+            check_only: true
+            custom_env:
+              IPHONEOS_DEPLOYMENT_TARGET: 17.5
+          - thing: aarch64-tvos
+            target: aarch64-apple-tvos
+            os: macos-latest
+            check_only: true
+            custom_env:
+              TVOS_DEPLOYMENT_TARGET: 17.5
+          - thing: aarch64-tvos-sim
+            target: aarch64-apple-tvos-sim
+            os: macos-latest
+            check_only: true
+            custom_env:
+              TVOS_DEPLOYMENT_TARGET: 17.5
+          - thing: i686-linux
+            target: i686-unknown-linux-gnu
+            rust: stable
+            os: ubuntu-latest
+            apt_packages: gcc-multilib g++-multilib
+            custom_env:
+              CXXFLAGS: -msse2
+          - thing: arm-linux
+            target: arm-unknown-linux-gnueabi
+            rust: stable
+            os: ubuntu-latest
+            apt_packages: gcc-arm-linux-gnueabi g++-arm-linux-gnueabi
+            check_only: true
+            custom_env:
+              CC_arm-unknown-linux-gnueabi: arm-linux-gnueabi-gcc
+              CXX_arm-unknown-linux-gnueabi: arm-linux-gnueabi-g++
+              CARGO_TARGET_ARM_UNKNOWN_LINUX_GNUEABI_LINKER: arm-linux-gnueabi-g++
+          - thing: aarch64-linux
+            target: aarch64-unknown-linux-gnu
+            rust: stable
+            os: ubuntu-latest
+            apt_packages: crossbuild-essential-arm64
+            check_only: true
+            custom_env:
+              CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+              CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
+              CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-g++
+          - thing: arm64-macos
+            target: aarch64-apple-darwin
+            rust: stable
+            os: macos-latest
+            check_only: true
+          - thing: x86_64-macos
+            target: x86_64-apple-darwin
+            rust: stable
+            os: macos-latest
+          - thing: x86_64-mingw
+            target: x86_64-pc-windows-gnu
+            rust: stable
+            os: windows-latest
+            check_only: true # tests are flaky for unclear reasons
+            custom_env:
+              CC: gcc
+              CXX: g++
+              C_INCLUDE_PATH: "C:\\msys64\\usr\\include"
+              CPLUS_INCLUDE_PATH: "C:\\msys64\\usr\\include"
+              LIBRARY_PATH: "C:\\msys64\\usr\\lib"
+              RUSTC_BOOTSTRAP: 1 # for -Z checksum-freshness
+            # CI's Windows doesn't have required root certs
+            extra_test_args: --workspace --exclude tokio-btls -Z checksum-freshness
+          - thing: i686-mingw
+            target: i686-pc-windows-gnu
+            rust: stable
+            os: windows-latest
+            check_only: true
+            custom_env:
+              RUSTC_BOOTSTRAP: 1 # for -Z checksum-freshness
+              CMAKE_GENERATOR: "MinGW Makefiles"
+              COLLECT_GCC: null
+            # CI's Windows doesn't have required root certs
+            extra_test_args: --workspace --exclude tokio-btls -Z checksum-freshness
+          - thing: i686-msvc
+            target: i686-pc-windows-msvc
+            rust: stable-x86_64-msvc
+            os: windows-latest
+            custom_env:
+              RUSTC_BOOTSTRAP: 1 # for -Z checksum-freshness
+              CXXFLAGS: -msse2
+            # CI's Windows doesn't have required root certs
+            extra_test_args: --workspace --exclude tokio-btls -Z checksum-freshness
+          - thing: x86_64-msvc
+            target: x86_64-pc-windows-msvc
+            rust: stable-x86_64-msvc
+            os: windows-latest
+            custom_env:
+              RUSTC_BOOTSTRAP: 1 # for -Z checksum-freshness
+            # CI's Windows doesn't have required root certs
+            extra_test_args: --workspace --exclude tokio-btls -Z checksum-freshness
+          - thing: aarch64-msvc
+            target: aarch64-pc-windows-msvc
+            rust: stable-aarch64-pc-windows-msvc
+            os: windows-11-arm
+            custom_env:
+              CMAKE_GENERATOR: "Visual Studio 18 2026"
+            extra_test_args: -p btls -p btls-sys
+          - thing: x86_64-msvc-static
+            target: x86_64-pc-windows-msvc
+            rust: stable-x86_64-msvc
+            os: windows-latest
+            custom_env:
+              RUSTC_BOOTSTRAP: 1 # for -Z checksum-freshness
+              RUSTFLAGS: -Dwarnings -C target-feature=+crt-static
+            # CI's Windows doesn't have required root certs
+            extra_test_args: --workspace --exclude tokio-btls -Z checksum-freshness
+    env:
+      CARGO_HOME: ${{ github.workspace }}/.cache/cargo
+      CARGO_BUILD_BUILD_DIR: ${{ github.workspace }}/.cache/build-dir
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: "recursive"
+      - name: Install Rust (rustup)
+        run: rustup update ${{ matrix.rust }} --no-self-update && rustup default ${{ matrix.rust }} && rustup target add ${{ matrix.target }}
+        shell: bash
+      - name: Get rust version
+        id: rust-version
+        shell: bash
+        run: |
+          echo "version=$(rustc --version)" >> $GITHUB_OUTPUT
+      - name: Prepopulate cargo index
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            .cache/cargo/registry/index
+            .cache/cargo/registry/cache
+          key: index-${{ steps.rust-version.outputs.version }}-${{ hashFiles('Cargo.toml') }}
+          enableCrossOsArchive: true
+      - name: Install golang
+        uses: actions/setup-go@v7
+        with:
+          go-version: ">=1.27.0"
+      - name: Install target-specific APT dependencies
+        timeout-minutes: 10
+        if: "matrix.apt_packages != ''"
+        run: sudo apt update && sudo apt install -y ${{ matrix.apt_packages }}
+        shell: bash
+      - name: Install nasm
+        if: startsWith(matrix.os, 'windows') && matrix.target != 'aarch64-pc-windows-msvc'
+        run: choco install nasm
+        shell: cmd
+      - name: Setup 32-bit MSYS2
+        if: matrix.thing == 'i686-mingw'
+        uses: msys2/setup-msys2@v2
+        id: msys2
+        with:
+          msystem: MINGW32
+          path-type: inherit
+          install: >-
+            mingw-w64-i686-gcc
+            mingw-w64-i686-cmake
+      - name: Setup 32-bit MSYS2 Env vars
+        if: matrix.thing == 'i686-mingw'
+        shell: bash
+        run: |
+          MSYS_ROOT='${{ steps.msys2.outputs.msys2-location }}'
+          test -d "$MSYS_ROOT\\mingw32\\bin"
+          echo >> $GITHUB_PATH "$MSYS_ROOT\\mingw32\\bin"
+          echo >> $GITHUB_PATH "$MSYS_ROOT\\usr\\bin"
+          echo >> $GITHUB_ENV CC="$MSYS_ROOT\\mingw32\\bin\\gcc"
+          echo >> $GITHUB_ENV CXX="$MSYS_ROOT\\mingw32\\bin\\g++"
+          echo >> $GITHUB_ENV AR="$MSYS_ROOT\\mingw32\\bin\\ar"
+          echo >> $GITHUB_ENV CFLAGS="-mlong-double-64 -I$MSYS_ROOT\\mingw32\\include"
+          echo >> $GITHUB_ENV CXXFLAGS="-mlong-double-64 -I$MSYS_ROOT\\mingw32\\include"
+          echo >> $GITHUB_ENV BINDGEN_EXTRA_CLANG_ARGS="-mlong-double-64 -I$MSYS_ROOT\\mingw32\\include"
+          echo >> $GITHUB_ENV LIBRARY_PATH="$MSYS_ROOT\\mingw32\\lib"
+          echo >> $GITHUB_ENV LDFLAGS="-L$MSYS_ROOT\\mingw32\\lib"
+      - name: Install LLVM and Clang
+        # Windows ARM64 uses the runner's native LLVM.
+        if: startsWith(matrix.os, 'windows') && matrix.target != 'aarch64-pc-windows-msvc'
+        uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: "11.0"
+          directory: ${{ runner.temp }}/llvm
+      - name: Set LIBCLANG_PATH
+        if: startsWith(matrix.os, 'windows')
+        run: echo "LIBCLANG_PATH=$((gcm clang).source -replace "clang.exe")" >> $env:GITHUB_ENV
+      - name: Set Android Linker path
+        if: endsWith(matrix.thing, '-android')
+        run: echo "CARGO_TARGET_$(echo ${{ matrix.target }} | tr \\-a-z _A-Z)_LINKER=$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/$(echo ${{ matrix.target }} | sed s/armv7/armv7a/)21-clang++" >> "$GITHUB_ENV"
+      - name: Fetch deps
+        run: cargo fetch --target ${{ matrix.target }}
+        shell: bash
+        env: ${{ matrix.custom_env }}
+        # Windows builds are the slowest
+      - name: Cache deps in Windows tests
+        if: startsWith(matrix.os, 'windows')
+        uses: actions/cache/restore@v6
+        id: test-cache-restore
+        with:
+          path: .cache/build-dir
+          key: wintest-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+      - name: Build tests
+        # We `build` because we want the linker to verify we are cross-compiling correctly for check-only targets.
+        run: cargo build -vv --target ${{ matrix.target }} --tests ${{ matrix.extra_test_args }}
+        shell: bash
+        env: ${{ matrix.custom_env }}
+        # By default it'd be saved after later cargo calls, which already invalidated the cache
+      - name: Cache deps in Windows tests
+        if: startsWith(matrix.os, 'windows')
+        uses: actions/cache/save@v6
+        with:
+          path: .cache/build-dir
+          key: ${{ steps.test-cache-restore.outputs.cache-primary-key }}
+      - name: Run tests (skip=${{ matrix.check_only }})
+        if: "!matrix.check_only"
+        run: cargo test --target ${{ matrix.target }} ${{ matrix.extra_test_args }}
+        shell: bash
+        env: ${{ matrix.custom_env }}
+      - name: Test btls-sys cargo publish
+        # Running `cargo publish --dry-run` tests two things:
+        #
+        # 1. That `btls-sys` can build BoringSSL with just the files included
+        #    in the crates.io package (as determined by the `include` field in
+        #    the `Cargo.toml`).
+        # 2. That the final `btls-sys` package size, including the BoringSSL
+        #    submodules, is not too large to be published to `crates.io`.
+        #
+        # Both of these may no longer be the case after updating the BoringSSL
+        # submodules to a new revision, so it's important to test this on CI.
+        run: cargo publish --dry-run --target ${{ matrix.target }} -p btls-sys
+        shell: bash
+        env: ${{ matrix.custom_env }}
+
+  test-fips:
+    name: Test FIPS integration
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        submodules: 'recursive'
+    - name: Install Rust (rustup)
+      run: rustup update stable --no-self-update && rustup default stable
+      shell: bash
+    - name: Install golang
+      uses: actions/setup-go@v7
+      with:
+        go-version: '>=1.27.0'
+    - name: Run tests
+      run: cargo test --features fips
+    - name: Test btls-sys cargo publish (FIPS)
+      # Running `cargo publish --dry-run` tests two things:
+      #
+      # 1. That `btls-sys` can build BoringSSL with just the files included
+      #    in the crates.io package (as determined by the `include` field in
+      #    the `Cargo.toml`).
+      # 2. That the final `btls-sys` package size, including the BoringSSL
+      #    submodules, is not too large to be published to `crates.io`.
+      #
+      # Both of these may no longer be the case after updating the BoringSSL
+      # submodules to a new revision, so it's important to test this on CI.
+      run: cargo publish --dry-run -p btls-sys --features fips
+
+  test-boringssl:
+    name: Test BoringSSL upstream test suite
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        submodules: 'recursive'
+    - name: Install golang
+      uses: actions/setup-go@v7
+      with:
+        go-version: '>=1.27.0'
+    - name: Install build tools (clang, cmake)
+      timeout-minutes: 10
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y clang libclang-rt-dev cmake
+    - name: Apply btls-sys patches
+      working-directory: btls-sys/deps/boringssl
+      run: |
+        for p in \
+          bad-cert-verification.patch \
+          boring-pq.patch \
+          rpk.patch \
+          0001-boringssl-ffdhe.patch \
+          0002-boringssl-legacy-ciphers.patch \
+          0003-boringssl-tls-options.patch \
+          0004-boringssl-extension-order.patch \
+          0005-record-size-limit.patch \
+          0006-delegated-credentials.patch \
+          0007-boringssl-f5-padding.patch \
+          0008-boringssl-sigalgs.patch \
+          0009-boringssl-zstd-cert-compression.patch \
+          0010-boringssl-build-compat.patch \
+          0011-boringssl-seal-app-data.patch \
+          0012-boringssl-cheap-error-reset.patch \
+          0013-ech-grease-payload-policy.patch \
+          boringssl-rand-double-free.patch \
+          boringssl-loongarch.patch \
+          underscore-wildcards.patch \
+          relax-cert-validation.patch; do
+          echo "Applying $p"
+          patch -p1 < "../../patches/$p"
+        done
+    - name: Configure BoringSSL ASan build
+      working-directory: btls-sys/deps/boringssl
+      run: >-
+        cmake -B build
+        -DCMAKE_BUILD_TYPE=RelWithDebInfo
+        -DCMAKE_C_COMPILER=clang
+        -DCMAKE_CXX_COMPILER=clang++
+        -DASAN=1
+    - name: Build BoringSSL
+      working-directory: btls-sys/deps/boringssl
+      run: cmake --build build --parallel
+    - name: Run BoringSSL C/C++ test suite
+      working-directory: btls-sys/deps/boringssl
+      run: go run util/all_tests.go
+    - name: Run BoringSSL SSL runner tests
+      working-directory: btls-sys/deps/boringssl/ssl/test/runner
+      run: go test
+    - name: Run BoringSSL SSL runner tests through SSL_seal_app_data
+      working-directory: btls-sys/deps/boringssl/ssl/test/runner
+      run: >-
+        go test -shim-extra-flags=-seal-app-data
+        -test='Basic-*;TLS-*;*KeyUpdate*;*CBCRecordSplitting*;*MaxSendFragment*;Renegotiate-*;*Shutdown*;*EarlyData*;*FalseStart*;*Alert*'
+
+  cross-build:
+    name: Cross build from macOS to Linux
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: "recursive"
+      - name: Install Rust (rustup)
+        run: rustup toolchain install stable --no-self-update --profile minimal --target ${{ matrix.target }} && rustup default stable
+        shell: bash
+      - name: Install golang
+        uses: actions/setup-go@v7
+        with:
+          go-version: ">=1.27.0"
+      - name: Install ${{ matrix.target }} toolchain
+        run: |
+          brew tap messense/macos-cross-toolchains
+          brew untap aws/tap || true
+          brew trust messense/macos-cross-toolchains
+          brew install ${{ matrix.target }}
+        shell: bash
+      - name: Set BORING_BSSL_SYSROOT
+        run: echo "BORING_BSSL_SYSROOT=$(brew --prefix ${{ matrix.target }})/toolchain/${{ matrix.target }}/sysroot" >> $GITHUB_ENV
+        shell: bash
+      - name: Set CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER
+        run: echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=${{ matrix.target }}-gcc" >> $GITHUB_ENV
+        shell: bash
+      - name: Set CXXFLAGS
+        run: echo "CXXFLAGS=-D__STDC_FORMAT_MACROS" >> $GITHUB_ENV
+      - name: Build for ${{ matrix.target }}
+        run: cargo build --target ${{ matrix.target }} --all-targets
+
+  test-features:
+    name: Test features
+    runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: 1
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: "recursive"
+      - name: Install Rust (rustup)
+        run: rustup update stable --no-self-update && rustup default stable
+      - name: Install golang
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: btls-sys/deps/boringssl/go.mod
+          cache-dependency-path: btls-sys/deps/boringssl/go.sum
+      - name: Run `rpk` and `underscore-wildcards` tests
+        run: cargo test --features rpk,underscore-wildcards -- --skip badssl_ciphers_negotiate
+      # Symbols reached only through a non-default feature are invisible to the
+      # per-target `prefix-symbols` jobs, which link `btls-sys` alone. Features are
+      # listed explicitly rather than via `--all-features`, which would pull in
+      # `fips`, rejected by symbol prefixing, and `legacy-compat-deprecated`, whose
+      # expectations describe an older BoringSSL than the vendored one.
+      - name: Run `prefix-symbols` tests with every compatible feature
+        run: |
+          cargo test -p btls \
+            --features prefix-symbols,prf,mlkem,mldsa,credential,rpk,underscore-wildcards,relax-cert-validation
+      - name: Run `allow-crl-extensions-bad-version` tests
+        run: cargo test -p btls-sys --features allow-crl-extensions-bad-version
+      - name: Run `mldsa` tests
+        run: cargo test -p btls --features mldsa
+      # BoringSSL's TLS 1.3 and ECH GREASE defaults depend on AES hardware.
+      # Masking AES-NI (CPUID.1:ECX bit 25) covers the ChaCha20-first defaults.
+      - name: Run library tests without AES hardware
+        env:
+          OPENSSL_ia32cap: "~0x200000000000000"
+          BTLS_TEST_NO_AES: "1"
+        run: cargo test -p btls --lib --features mldsa
+      - name: Run `relax-cert-validation` tests
+        run: cargo test -p btls --features relax-cert-validation
+      - name: Check `fips` and `prefix-symbols` are rejected
+        run: |
+          log="$RUNNER_TEMP/fips-prefix-symbols.log"
+          if cargo build -p btls-sys --features fips,prefix-symbols >"$log" 2>&1; then
+            cat "$log"
+            echo 'expected the fips + prefix-symbols combination to be rejected'
+            exit 1
+          fi
+          cat "$log"
+          grep -qF '`prefix-symbols` features are mutually exclusive' "$log"
+
+  crates:
+    name: crates
+    needs: [rustfmt, clippy, test, cross-build, test-features]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      - name: Prebuild btls-sys
+        run: cargo build -p btls-sys
+      - name: publish crates
+        shell: bash
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$(git diff --stat)" != '' ]]; then
+            echo 'Please commit or discard your changes before creating a new release.'
+            exit 1
+          fi
+
+          echo "===  Publishing btls-sys... ==="
+          (cd btls-sys && cargo publish)
+          sleep 20
+
+          echo "===  Publishing btls... ==="
+          (cd btls && cargo publish)
+          sleep 20
+
+          echo "===  Publishing tokio-btls... ==="
+          (cd tokio-btls && cargo publish)
+          sleep 20
+
+      - name: Upload binaries to GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          prerelease: ${{  contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
+          generate_release_notes: true
+
+  prefix-symbols:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            bin: ""
+            test: true
+            custom_env: {}
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            bin: ""
+            test: true
+            custom_env: {}
+          # Covers the leading-underscore branch of the bindgen link name
+          # override, which only 32-bit Windows and Mach-O targets take.
+          - target: i686-pc-windows-msvc
+            os: windows-latest
+            bin: ""
+            test: true
+            custom_env:
+              CXXFLAGS: -msse2 # matches the `i686-msvc` test job
+          - target: x86_64-apple-darwin
+            os: macos-15-intel
+            bin: ""
+            test: true
+            custom_env: {}
+          - target: aarch64-apple-darwin
+            os: macos-15
+            bin: ""
+            test: true
+            custom_env: {}
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            bin: ""
+            test: false
+            apt_packages: crossbuild-essential-arm64 binutils-multiarch
+            custom_env:
+              CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+              CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
+              CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-g++
+          - target: armv7-linux-androideabi
+            os: ubuntu-latest
+            bin: ndk
+            test: false
+            custom_env: {}
+          - target: aarch64-linux-android
+            os: ubuntu-latest
+            bin: ndk
+            test: false
+            custom_env: {}
+          - target: x86_64-linux-android
+            os: ubuntu-latest
+            bin: ndk
+            test: false
+            custom_env: {}
+    defaults:
+      run:
+        working-directory: test-project
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - name: Install golang
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: btls-sys/deps/boringssl/go.mod
+          cache-dependency-path: btls-sys/deps/boringssl/go.sum
+      - name: Select native Perl on Windows
+        if: runner.os == 'Windows'
+        working-directory: .
+        shell: pwsh
+        run: |
+          $perl = Get-Command perl.exe -All |
+            Where-Object { $_.Source -notmatch '[\\/](Git|msys64)[\\/]' } |
+            Select-Object -First 1 -ExpandProperty Source
+          if (-not $perl) {
+            throw 'Could not find a native Perl installation'
+          }
+          & $perl -MLocale::Maketext::Simple -e 1
+          if ($LASTEXITCODE -ne 0) {
+            throw "Native Perl failed to load Locale::Maketext::Simple: $perl"
+          }
+          "OPENSSL_SRC_PERL=$perl" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Create test project
+        working-directory: .
+        shell: bash
+        run: |
+          cargo init test-project
+          cd test-project
+          cargo add btls-sys --path ../btls-sys/
+          cargo add openssl-sys -F vendored
+          cat > src/main.rs <<'EOF'
+          fn main() {
+              btls_sys::init();
+              openssl_sys::init();
+              unsafe {
+                  let ctx = btls_sys::SSL_CTX_new(btls_sys::TLS_method());
+                  assert!(!ctx.is_null());
+                  assert_eq!(btls_sys::SSL_CTX_set_extension_order(ctx, std::ptr::null(), 0), 1);
+                  btls_sys::SSL_CTX_free(ctx);
+
+                  // `CRYPTO_tls1_prf` is bound only because `tls_prf.h` is in the bindgen
+                  // header list. A symbol left out of that list keeps the unprefixed name
+                  // and fails to link here.
+                  let mut prf = [0u8; 32];
+                  assert_eq!(
+                      btls_sys::internal::CRYPTO_tls1_prf(
+                          btls_sys::EVP_sha256(),
+                          prf.as_mut_ptr(),
+                          prf.len(),
+                          b"secret".as_ptr(),
+                          6,
+                          b"label".as_ptr(),
+                          5,
+                          b"seed".as_ptr(),
+                          4,
+                          std::ptr::null(),
+                          0,
+                      ),
+                      1
+                  );
+              }
+          }
+          EOF
+      - name: Install Rust toolchain
+        shell: bash
+        run: rustup target add ${{ matrix.target }}
+      - name: Install target-specific APT dependencies
+        timeout-minutes: 10
+        if: matrix.apt_packages != ''
+        run: sudo apt update && sudo apt install -y ${{ matrix.apt_packages }}
+      - name: Install cargo-ndk
+        if: contains(matrix.target, 'android')
+        run: cargo install cargo-ndk
+      - name: Build without prefixing
+        env: ${{ matrix.custom_env }}
+        shell: bash
+        run: |
+          RC=0
+          cargo ${{ matrix.bin }} build --target ${{ matrix.target }} >logs 2>&1 || RC=$?
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            # rustc may report ld64 collisions as warnings and still return zero.
+            if ! grep -Fq 'ld: duplicate symbol' logs ||
+              ! grep -Fq 'libbtls_sys-' logs ||
+              ! grep -Fq 'libopenssl_sys-' logs; then
+              cat logs
+              echo "macOS build did not report a BoringSSL/OpenSSL linker collision: $RC"
+              exit 1
+            fi
+          elif [[ "$RC" -eq 0 ]] ||
+            ! grep -Eq 'duplicate symbol|multiple definition of|LNK2005' logs; then
+            cat logs
+            echo "Unprefixed build did not fail with duplicate symbols: $RC"
+            exit 1
+          fi
+          cat logs
+          echo "Duplicate symbols reported as expected on $RUNNER_OS: $RC"
+      - name: Add prefix-symbols feature
+        shell: bash
+        run: cargo add btls-sys --path ../btls-sys/ -F prefix-symbols
+      - name: Build with prefixing
+        env: ${{ matrix.custom_env }}
+        shell: bash
+        run: cargo ${{ matrix.bin }} build --target ${{ matrix.target }}
+      - name: Run symbol-prefix integration test
+        if: matrix.test == true
+        shell: bash
+        run: cargo ${{ matrix.bin }} run --target ${{ matrix.target }}
+      # The jobs above pair btls-sys with OpenSSL, which shares only BoringSSL's public
+      # C API. boring-sys is the same codebase, so it also collides on internals and on
+      # C++ symbols that `prefix_symbols.h` does not rename. Linux only: which symbols
+      # exist is platform-independent, and boring-sys builds its own BoringSSL.
+      - name: Verify coexistence with an unprefixed BoringSSL
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        working-directory: .
+        shell: bash
+        run: |
+          # Outside the workspace: `cargo init` would otherwise add the project to
+          # `members`, and its binary would land in the workspace target directory.
+          project="$RUNNER_TEMP/boring-coexistence"
+          cargo init "$project"
+          cd "$project"
+          cargo add btls-sys --path "$GITHUB_WORKSPACE/btls-sys" -F prefix-symbols
+          cargo add boring-sys
+          cat > src/main.rs <<'EOF'
+          fn main() {
+              unsafe {
+                  let prefixed = btls_sys::SSL_CTX_new(btls_sys::TLS_method());
+                  assert!(!prefixed.is_null());
+                  btls_sys::SSL_CTX_free(prefixed);
+
+                  let unprefixed = boring_sys::SSL_CTX_new(boring_sys::TLS_method());
+                  assert!(!unprefixed.is_null());
+                  boring_sys::SSL_CTX_free(unprefixed);
+              }
+          }
+          EOF
+          cargo run
+          # Without both libraries actually linked in, the run above would prove nothing.
+          nm target/debug/boring-coexistence > symbols
+          grep -q ' btls_sys_SSL_CTX_new$' symbols
+          grep -qE ' [TtWw] SSL_CTX_new$' symbols
+      - name: Verify packaged btls-sys with symbol prefixing
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        working-directory: btls-sys
+        shell: bash
+        run: cargo package --locked --features prefix-symbols

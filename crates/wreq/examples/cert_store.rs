@@ -1,0 +1,78 @@
+use std::time::Duration;
+
+use wreq::{
+    Client,
+    tls::{TlsInfo, trust::CertStore},
+};
+
+/// Certificate Store Example
+///
+/// In most cases, wreq can choose the certificate store automatically:
+/// - `webpki-roots` loads Mozilla root certificates and is enabled by default.
+/// - `chromium-roots` loads Chromium Root Store certificates and can be combined with Mozilla
+///   roots.
+/// - Without either feature, BoringSSL uses its default verification paths.
+///
+/// Manual certificate store configuration is only needed in the following special cases:
+///
+/// ## Scenarios requiring custom certificate store:
+///
+/// ### 1. Self-signed Certificates
+/// - Connect to internal services using self-signed certificates
+/// - Test servers in development environments
+///
+/// ### 2. Enterprise Internal CA
+/// - Add root certificates from enterprise internal certificate authorities
+/// - Access HTTPS services on corporate intranets
+///
+/// ### 3. Certificate Updates and Management
+/// - Dynamically update certificates in the certificate store
+/// - Remove revoked or expired certificates
+///
+/// ### 4. Compliance Requirements
+/// - Special compliance requirements for certain industries or regions
+/// - Need to use specific certificate collections
+///
+/// ### 5. Performance Optimization
+/// - Reduce certificate store size to improve TLS handshake performance
+/// - Include only necessary root certificates
+#[tokio::main]
+async fn main() -> wreq::Result<()> {
+    // Create a client with a custom certificate store using webpki-roots
+    let client = Client::builder()
+        .tls_cert_store(CertStore::from_der_certs(
+            webpki_root_certs::TLS_SERVER_ROOT_CERTS,
+        )?)
+        .build()?;
+
+    // Use the API you're already familiar with
+    client.get("https://www.google.com").send().await?;
+
+    // Self-signed certificate Client
+    // Skip certificate verification for self-signed certificates
+    let client = Client::builder()
+        .tls_info(true)
+        .tls_cert_verification(false)
+        .build()?;
+
+    // Use the API you're already familiar with
+    let resp = client.get("https://self-signed.badssl.com/").send().await?;
+    if let Some(tls_info) = resp.extensions().get::<TlsInfo>()
+        && let Some(peer_cert_der) = tls_info.peer_certificate()
+    {
+        // Create self-signed certificate Store
+        let self_signed_store = CertStore::from_der_certs([peer_cert_der])?;
+
+        // Create a client with self-signed certificate store
+        let client = Client::builder()
+            .tls_cert_store(self_signed_store)
+            .connect_timeout(Duration::from_secs(10))
+            .build()?;
+
+        // Use the API you're already familiar with
+        let resp = client.get("https://self-signed.badssl.com/").send().await?;
+        println!("{}", resp.text().await?);
+    }
+
+    Ok(())
+}

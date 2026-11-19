@@ -1,0 +1,5 @@
+[submodule "crates/btls/btls-sys/deps/boringssl"]
+	path = crates/btls/btls-sys/deps/boringssl
+	url = https://github.com/google/boringssl.git
+	ignore = dirty
+	shallow = true
