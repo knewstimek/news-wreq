@@ -47,6 +47,7 @@ distribution version carries this fork's local version suffix.
 The [Linux Python wheel workflow](.github/workflows/linux-wheel.yml) builds
 and tests the Linux x86-64 wheel. Download the `wreq-manylinux-x86_64`
 artifact from a successful workflow run and install the wheel inside the ZIP.
+The workflow uses sccache to reuse compiled objects across runs.
 
 `wreq.TlsOptions` accepts `client_hello_padding`, `post_handshake_auth`,
 and `sigalgs_list`. For TLS 1.3 cipher ordering, pass
