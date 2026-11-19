@@ -44,6 +44,10 @@ The wheel retains `import wreq` and uses this checkout's `wreq`, `wreq-util`,
 and `btls`. Install the generated wheel from `target/wheels`. The Python
 distribution version carries this fork's local version suffix.
 
+The [Linux Python wheel workflow](.github/workflows/linux-wheel.yml) builds
+and tests the Linux x86-64 wheel. Download the `wreq-manylinux-x86_64`
+artifact from a successful workflow run and install the wheel inside the ZIP.
+
 `wreq.TlsOptions` accepts `client_hello_padding`, `post_handshake_auth`,
 and `sigalgs_list`. For TLS 1.3 cipher ordering, pass
 `tls13_cipher_list` with `wreq.Tls13Cipher` values. The upstream Python
